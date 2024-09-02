@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8005:8005"
+    depends_on:
+      - db
+    volumes:
+      - ./output:/app/output
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/Sao_Paulo
+      - WAIT_HOSTS=db:3306
+    command: ["sh", "-c", "sleep 10 && uvicorn main:app --host 0.0.0.0 --port 8005"]
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: sellout2k24
+      MYSQL_DATABASE: sellout_db
+      MYSQL_USER: user
+      MYSQL_PASSWORD: sellout2k24
+    ports:
+      - "3308:3306"
+    volumes:
+      - .:/app
+      - db_data:/var/lib/mysql
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    restart: always
+
+volumes:
+  db_data:

@@ -1,0 +1,60 @@
+2024-09-02 13:35:02,754 - root - INFO - Caminho do arquivo sellout construído: drive-linea/2157/DEFAULT_FILES/SELLOUT/2024/09/sellout_202409.parquet
+2024-09-02 13:35:03,463 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:03,469 - root - INFO - Tentativa de download 1 para o arquivo: drive-linea/2157/DEFAULT_FILES/SELLOUT/2024/09/sellout_202409.parquet
+2024-09-02 13:35:04,096 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/SELLOUT/2024/09/sellout_202409.parquet baixado com sucesso.
+2024-09-02 13:35:04,103 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/SELLOUT/2024/09/sellout_202409.parquet descomprimido com sucesso.
+2024-09-02 13:35:04,136 - root - INFO - Dados extraídos do arquivo Parquet: extracted_files/sellout_202409.parquet/part-00000-2464511e-5b55-4d0d-a2a6-b01418788198-c000.snappy.parquet
+2024-09-02 13:35:12,820 - root - INFO - Dados antigos da tabela sellout deletados com sucesso.
+2024-09-02 13:35:12,832 - root - INFO - Novos dados inseridos na tabela com sucesso.
+2024-09-02 13:35:12,839 - root - INFO - Arquivo Parquet extracted_files/sellout_202409.parquet/part-00000-2464511e-5b55-4d0d-a2a6-b01418788198-c000.snappy.parquet removido com sucesso.
+2024-09-02 13:35:12,854 - root - INFO - Arquivo Zip sellout_202409.parquet.zip removido com sucesso.
+2024-09-02 13:35:12,858 - root - INFO - Processamento de sellout concluído com sucesso.
+2024-09-02 13:35:13,896 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:13,907 - root - INFO - Url da api de lista de arquivos: https://drive.mtrix.com.br/2157/distributors/20240901000000
+2024-09-02 13:35:14,856 - root - INFO - Último arquivo distributors obtido: drive-linea/2157/DEFAULT_FILES/DISTRIBUTORS/distributors.parquet
+2024-09-02 13:35:15,475 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:15,479 - root - INFO - Tentativa de download 1 para o arquivo: drive-linea/2157/DEFAULT_FILES/DISTRIBUTORS/distributors.parquet
+2024-09-02 13:35:16,027 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/DISTRIBUTORS/distributors.parquet baixado com sucesso.
+2024-09-02 13:35:16,040 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/DISTRIBUTORS/distributors.parquet descomprimido com sucesso.
+2024-09-02 13:35:16,069 - root - INFO - Dados extraídos do arquivo Parquet: extracted_files/distributors.parquet/part-00000-fb3292da-0488-461e-b1de-56079c4aa4e6-c000.snappy.parquet
+2024-09-02 13:35:16,217 - root - INFO - Dados antigos da tabela distribuidores deletados com sucesso.
+2024-09-02 13:35:16,442 - root - INFO - Novos dados inseridos na tabela distribuidores com sucesso.
+2024-09-02 13:35:16,448 - root - INFO - Arquivo Parquet extracted_files/distributors.parquet/part-00000-fb3292da-0488-461e-b1de-56079c4aa4e6-c000.snappy.parquet removido com sucesso.
+2024-09-02 13:35:16,452 - root - INFO - Arquivo Zip distributors.parquet.zip removido com sucesso.
+2024-09-02 13:35:16,455 - root - INFO - Processamento de distributors concluído com sucesso.
+2024-09-02 13:35:17,030 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:17,034 - root - INFO - Url da api de lista de arquivos: https://drive.mtrix.com.br/2157/products/20240901000000
+2024-09-02 13:35:17,628 - root - INFO - Último arquivo products obtido: drive-linea/2157/DEFAULT_FILES/PRODUCTS/products.parquet
+2024-09-02 13:35:18,176 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:18,184 - root - INFO - Tentativa de download 1 para o arquivo: drive-linea/2157/DEFAULT_FILES/PRODUCTS/products.parquet
+2024-09-02 13:35:19,217 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/PRODUCTS/products.parquet baixado com sucesso.
+2024-09-02 13:35:19,225 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/PRODUCTS/products.parquet descomprimido com sucesso.
+2024-09-02 13:35:19,235 - root - INFO - Dados extraídos do arquivo Parquet: extracted_files/products.parquet/part-00000-a847758c-2066-49d9-b4a0-0845ae5264f3-c000.snappy.parquet
+2024-09-02 13:35:19,422 - root - INFO - Dados antigos da tabela produtos deletados com sucesso.
+2024-09-02 13:35:19,633 - root - INFO - Novos dados inseridos na tabela produtos com sucesso.
+2024-09-02 13:35:19,640 - root - INFO - Arquivo Parquet extracted_files/products.parquet/part-00000-a847758c-2066-49d9-b4a0-0845ae5264f3-c000.snappy.parquet removido com sucesso.
+2024-09-02 13:35:19,646 - root - INFO - Arquivo Zip products.parquet.zip removido com sucesso.
+2024-09-02 13:35:19,651 - root - INFO - Processamento de products concluído com sucesso.
+2024-09-02 13:35:19,658 - root - INFO - Caminho do arquivo stock construído: drive-linea/2157/DEFAULT_FILES/STOCK/2024/09/stock_202409.parquet
+2024-09-02 13:35:20,208 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:20,218 - root - INFO - Tentativa de download 1 para o arquivo: drive-linea/2157/DEFAULT_FILES/STOCK/2024/09/stock_202409.parquet
+2024-09-02 13:35:21,234 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/STOCK/2024/09/stock_202409.parquet baixado com sucesso.
+2024-09-02 13:35:21,239 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/STOCK/2024/09/stock_202409.parquet descomprimido com sucesso.
+2024-09-02 13:35:21,257 - root - INFO - Dados extraídos do arquivo Parquet: extracted_files/stock_202409.parquet/part-00000-7c8af46a-2abf-44aa-a65f-f79b12f0d373-c000.snappy.parquet
+2024-09-02 13:35:39,594 - root - INFO - Dados antigos da tabela estoque deletados com sucesso.
+2024-09-02 13:35:39,895 - root - INFO - Novos dados inseridos na tabela estoque com sucesso.
+2024-09-02 13:35:39,899 - root - INFO - Arquivo Parquet extracted_files/stock_202409.parquet/part-00000-7c8af46a-2abf-44aa-a65f-f79b12f0d373-c000.snappy.parquet removido com sucesso.
+2024-09-02 13:35:39,909 - root - INFO - Arquivo Zip stock_202409.parquet.zip removido com sucesso.
+2024-09-02 13:35:39,916 - root - INFO - Processamento de stock concluído com sucesso.
+2024-09-02 13:35:39,921 - root - INFO - Caminho do arquivo sfd construído: drive-linea/2157/DEFAULT_FILES/SFD/2024/09/sfd_202409.parquet
+2024-09-02 13:35:40,209 - root - INFO - Access key obtida com sucesso.
+2024-09-02 13:35:40,214 - root - INFO - Tentativa de download 1 para o arquivo: drive-linea/2157/DEFAULT_FILES/SFD/2024/09/sfd_202409.parquet
+2024-09-02 13:35:40,832 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/SFD/2024/09/sfd_202409.parquet baixado com sucesso.
+2024-09-02 13:35:40,844 - root - INFO - Arquivo drive-linea/2157/DEFAULT_FILES/SFD/2024/09/sfd_202409.parquet descomprimido com sucesso.
+2024-09-02 13:35:40,859 - root - INFO - Dados extraídos do arquivo Parquet: extracted_files/sfd_202409.parquet/part-00000-3d3f67af-eeb4-4426-b2d4-1a4add205552-c000.snappy.parquet
+2024-09-02 13:35:41,059 - root - INFO - Deletados 0 registros da tabela forca_vendas.
+2024-09-02 13:35:41,063 - root - INFO - Total de 0 registros deletados da tabela forca_vendas.
+2024-09-02 13:35:41,071 - root - INFO - Novos dados inseridos na tabela forca_vendas com sucesso.
+2024-09-02 13:35:41,076 - root - INFO - Arquivo Parquet extracted_files/sfd_202409.parquet/part-00000-3d3f67af-eeb4-4426-b2d4-1a4add205552-c000.snappy.parquet removido com sucesso.
+2024-09-02 13:35:41,080 - root - INFO - Arquivo Zip sfd_202409.parquet.zip removido com sucesso.
+2024-09-02 13:35:41,087 - root - INFO - Processamento de sfd concluído com sucesso.

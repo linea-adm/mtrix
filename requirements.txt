@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+requests
+pandas
+pyarrow
+fastparquet
+mysql-connector-python
+sqlalchemy
+pymysql
+cryptography
