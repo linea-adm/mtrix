@@ -1,0 +1,13 @@
+# Ignorar arquivos e diretórios de logs
+logs/
+*.log
+
+# Ignorar diretórios de dados do banco de dados
+db_data/
+
+# Ignorar arquivos compilados do Python
+__pycache__/
+*.pyc
+
+# Ignorar arquivos de pacotes
+*.zip
