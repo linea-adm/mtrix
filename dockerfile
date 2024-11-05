@@ -28,6 +28,14 @@ RUN echo "0 8 * * * /usr/bin/python3 /app/main.py >> /app/logs/cron.log 2>&1" > 
 RUN echo "29 11 * * * /usr/bin/python3 /app/main.py >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
 # RUN echo "*/15 * * * * /usr/bin/python3 /app/main.py >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
 
+# Adicionar script de cron para execução diária e também para os primeiros 10 dias do mês
+# Chama a rotina sellout e stock com o mês anterior
+RUN echo "0 8 1-10 * * curl -X POST \"http://localhost:8005/trigger/sellout\" -H \"Content-Type: application/json\" -d '{\"period\":\"$(date +\%Y\%m -d last-month)\"}' >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
+RUN echo "0 8 1-10 * * curl -X POST \"http://localhost:8005/trigger/stock\" -H \"Content-Type: application/json\" -d '{\"period\":\"$(date +\%Y\%m -d last-month)\"}' >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
+
+RUN echo "0 14 1-10 * * curl -X POST \"http://localhost:8005/trigger/sellout\" -H \"Content-Type: application/json\" -d '{\"period\":\"$(date +\%Y\%m -d last-month)\"}' >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
+RUN echo "0 14 1-10 * * curl -X POST \"http://localhost:8005/trigger/stock\" -H \"Content-Type: application/json\" -d '{\"period\":\"$(date +\%Y\%m -d last-month)\"}' >> /app/logs/cron.log 2>&1" >> /etc/cron.d/mtrix-cron
+
 # Adicionar permissões corretas ao arquivo cron
 RUN chmod 0644 /etc/cron.d/mtrix-cron
 

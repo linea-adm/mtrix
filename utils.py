@@ -55,6 +55,11 @@ def get_latest_file_name(data_type, period):
         files = response.json()
         if not files:
             raise ValueError("Nenhum arquivo encontrado.")
+
+        # Para o tipo customer, retorna o caminho específico conforme a documentação
+        if data_type == 'customer':
+            return "s3a://drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
+            
         latest_file = max(files, key=lambda x: x['dt_register'])
         logging.info(f"Último arquivo {data_type} obtido: {latest_file['file_path']}")
         return latest_file['file_path']
@@ -80,11 +85,13 @@ def get_manual_file_path(data_type, period):
     month = period_str[4:6]
     
     if data_type == 'sfd':
-        file_path = f"drive-linea/2157/DEFAULT_FILES/SFD/{year}/{month}/sfd_{year}{month}.parquet"
+        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/SFD/{year}/{month}/sfd_{year}{month}.parquet"
     elif data_type == 'stock':
-        file_path = f"drive-linea/2157/DEFAULT_FILES/STOCK/{year}/{month}/stock_{year}{month}.parquet"
+        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/STOCK/{year}/{month}/stock_{year}{month}.parquet"
     elif data_type == 'sellout':
-        file_path = f"drive-linea/2157/DEFAULT_FILES/SELLOUT/{year}/{month}/sellout_{year}{month}.parquet"
+        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/SELLOUT/{year}/{month}/sellout_{year}{month}.parquet"
+    elif data_type == 'customer':
+        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
     else:
         return get_latest_file_name(data_type, period) #raise ValueError(f"Tipo de dado {data_type} não é suportado.")
     
@@ -111,7 +118,7 @@ def download_and_extract_file(file_path, max_retries=5, base_delay=5):
         try:
             # Baixa o arquivo .zip
             logging.info(f"Tentativa de download {attempt + 1} para o arquivo: {file_path}")
-            response = requests.post(download_url, headers=headers, json=payload, timeout=600)  # Aumentando o timeout para 600 segundos
+            response = requests.post(download_url, headers=headers, json=payload, timeout=1200)  # Aumentando o timeout para 1200 segundos
             response.raise_for_status()
             
             zip_file_path = os.path.basename(file_path) + ".zip"
@@ -162,7 +169,7 @@ def download_and_extract_file2(file_path):
     try:
 
         # Baixa o arquivo .zip
-        response = requests.post(download_url, headers=headers, json=payload, timeout=300)
+        response = requests.post(download_url, headers=headers, json=payload, timeout=600)
         response.raise_for_status()
         zip_file_path = os.path.basename(file_path) + ".zip"
         with open(zip_file_path, "wb") as file:
@@ -405,4 +412,38 @@ def clear_and_insert_sales_force(df, ano, mes):
         logging.info("Novos dados inseridos na tabela forca_vendas com sucesso.")
     except Exception as e:
         logging.error(f"Erro ao limpar e inserir dados na tabela forca_vendas: {e}")
+        raise
+
+def clear_and_insert_customers(df):
+    """
+    Limpa dados antigos e insere novos dados na tabela de clientes.
+    
+    :param df: DataFrame com os dados a serem inseridos.
+    """
+    try:
+        connection = engine.raw_connection()
+        cursor = connection.cursor()
+        
+        # Deletar registros antigos
+        delete_query = "DELETE FROM clientes WHERE CUSTOMER_ID = %s"
+        for customer_id in df['CUSTOMER_ID'].unique():
+            cursor.execute(delete_query, (customer_id,))
+        logging.info("Dados antigos da tabela clientes deletados com sucesso.")
+        
+        # Inserir novos dados
+        insert_query = """
+            INSERT INTO clientes (
+                DISTRIBUTOR_CODE, CUSTOMER_ID, CUSTOMER_NAME, CUSTOMER_ADDRESS, CUSTOMER_NEIGHBORHOOD,
+                CUSTOMER_CITY, CUSTOMER_UF, CUSTOMER_ZIPCODE, CUSTOMER_SEGMENTATION, CUSTOMER_FLAG
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        for row in df.itertuples(index=False):
+            cursor.execute(insert_query, tuple(row))
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        logging.info("Novos dados inseridos na tabela clientes com sucesso.")
+    except Exception as e:
+        logging.error(f"Erro ao limpar e inserir dados na tabela clientes: {e}")
         raise

@@ -11,7 +11,8 @@ from utils import (
     clear_and_insert_distributors,
     clear_and_insert_products,
     clear_and_insert_stock,
-    clear_and_insert_sales_force
+    clear_and_insert_sales_force,
+    clear_and_insert_customers
 )
 
 # Configuração de logging
@@ -20,13 +21,11 @@ logging.config.fileConfig('/app/logging.conf')
 app = FastAPI()
 
 # Mapeamento de tipos de dados para nomes de tabelas
-
-
 def process_data(data_type, period=None, manual_trigger=False):
     """
     Processa os dados para um tipo específico.
     
-    :param data_type: Tipo de dado a ser processado (sellout, distributors, products, stock, sfd)
+    :param data_type: Tipo de dado a ser processado (sellout, distributors, products, stock, sfd, customer)
     :param period: Período específico para o processamento (aplicável a certos tipos de dados)
     :param manual_trigger: Indica se o trigger é manual    
     """
@@ -36,9 +35,11 @@ def process_data(data_type, period=None, manual_trigger=False):
             'distributors': 'distribuidores',
             'products': 'produtos',
             'stock': 'estoque',
-            'sfd': 'forca_vendas'
+            'sfd': 'forca_vendas',
+            'customer': 'clientes' 
         }
         if data_type not in table_name_map:
+            logging.info(f"Mapa: {table_name_map} ");
             raise ValueError(f"Tipo de dado {data_type} não é válido.")
 
         table_name = table_name_map[data_type]        
@@ -65,7 +66,10 @@ def process_data(data_type, period=None, manual_trigger=False):
         elif data_type == 'sfd':
             ano = period[:4]
             mes = period[4:6]
-            clear_and_insert_sales_force(df, ano, mes)        
+            clear_and_insert_sales_force(df, ano, mes)
+        elif data_type == 'customer':
+            clear_and_insert_customers(df)
+        
         # Remover os arquivos após o processamento
         remove_files(parquet_file_path, zip_file_path)
         logging.info(f"Processamento de {data_type} concluído com sucesso.")
@@ -79,7 +83,7 @@ def main_process(period=None):
     Processa todos os tipos de dados.
     """
     try:
-        data_types = ['sellout', 'distributors', 'products', 'stock', 'sfd']
+        data_types = ['sellout', 'distributors', 'products', 'stock', 'sfd', 'customer']
         for data_type in data_types:
             process_data(data_type, period, manual_trigger=True)
     except Exception as e:
@@ -115,7 +119,7 @@ def trigger_specific(data_type: str, period: str = None):
     """
     Endpoint para disparar o processamento manual de um tipo específico de dado.
     
-    :param data_type: Tipo de dado a ser processado (sellout, distributors, products, stock, sfd)
+    :param data_type: Tipo de dado a ser processado (sellout, distributors, products, stock, sfd, customer)
     :param period: Período específico para o processamento no formato YYYYMM ou YYYYMMDD000000
     :return: Mensagem de sucesso ou erro.
     """
@@ -131,6 +135,8 @@ def trigger_specific(data_type: str, period: str = None):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao iniciar processamento de {data_type}")
+
+
 
 if __name__ == "__main__":
     yesterday = datetime.now() - timedelta(days=1)
