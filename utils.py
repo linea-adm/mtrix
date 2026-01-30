@@ -257,6 +257,7 @@ def clear_and_insert_data(table_name, df, ano, mes):
                 QTY_CONV6, QTY_CONV7, QTY_CUSTOM1, QTY_CUSTOM2, SELLOUT_VALUE_LC, SELLOUT_CONV1
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+        df = df.fillna('')
         for row in df.itertuples(index=False):
             cursor.execute(insert_query, tuple(row))
         
@@ -288,6 +289,7 @@ def clear_and_insert_distributors(df):
                 DISTRIBUTOR_CODE, DISTRIBUTOR_ID, DISTRIBUTOR_NAME, DISTRIBUTOR_GROUP_NAME, DISTRIBUTOR_FLAG, DISTRIBUTOR_CHANNEL, SF_LEVEL1, SF_LEVEL2, SF_LEVEL3, SF_LEVEL4, SF_LEVEL5
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+        df = df.fillna('')
         for row in df.itertuples(index=False):
             cursor.execute(insert_query, tuple(row))
         
