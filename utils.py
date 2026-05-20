@@ -58,7 +58,7 @@ def get_latest_file_name(data_type, period):
 
         # Para o tipo customer, retorna o caminho específico conforme a documentação
         if data_type == 'customer':
-            return "s3a://drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
+            return "s3a://mtx-drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
             
         latest_file = max(files, key=lambda x: x['dt_register'])
         logging.info(f"Último arquivo {data_type} obtido: {latest_file['file_path']}")
@@ -85,13 +85,13 @@ def get_manual_file_path(data_type, period):
     month = period_str[4:6]
     
     if data_type == 'sfd':
-        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/SFD/{year}/{month}/sfd_{year}{month}.parquet"
+        file_path = f"s3a://mtx-drive-linea/2157/DEFAULT_FILES/SFD/{year}/{month}/sfd_{year}{month}.parquet"
     elif data_type == 'stock':
-        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/STOCK/{year}/{month}/stock_{year}{month}.parquet"
+        file_path = f"s3a://mtx-drive-linea/2157/DEFAULT_FILES/STOCK/{year}/{month}/stock_{year}{month}.parquet"
     elif data_type == 'sellout':
-        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/SELLOUT/{year}/{month}/sellout_{year}{month}.parquet"
+        file_path = f"s3a://mtx-drive-linea/2157/DEFAULT_FILES/SELLOUT/{year}/{month}/sellout_{year}{month}.parquet"
     elif data_type == 'customer':
-        file_path = f"s3a://drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
+        file_path = f"s3a://mtx-drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
     else:
         return get_latest_file_name(data_type, period) #raise ValueError(f"Tipo de dado {data_type} não é suportado.")
     
