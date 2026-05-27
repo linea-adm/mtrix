@@ -1,451 +1,470 @@
+"""
+sellout_pipeline.py
+
+Pipeline de ingestão Drive Mtrix (Linea) -> MySQL (sellout_db).
+
+Refatorações principais:
+- Consolidação das duas funções de download em uma única, com retry exponencial.
+- Fallback automático de gs:// para s3a:// quando a API responde 504.
+- Cache do access token para evitar reautenticação a cada chamada.
+- Função genérica clear_and_insert para reduzir duplicação.
+"""
+
 import logging
-import time
 import os
+import time
 import zipfile
+from typing import Optional, Tuple, Dict, Any
+
 import pandas as pd
 import requests
-from sqlalchemy import create_engine, text
-from requests.exceptions import RequestException
+from requests.exceptions import HTTPError, RequestException
+from sqlalchemy import create_engine
 
-# Configuração do banco de dados
-engine = create_engine("mysql+pymysql://user:sellout2k24@db:3306/sellout_db?connect_timeout=180")
+# ---------------------------------------------------------------------------
+# Configuração
+# ---------------------------------------------------------------------------
 
-# URLs e credenciais da API
-auth_url = 'https://drive.mtrix.com.br/auth'
-base_url = 'https://drive.mtrix.com.br/2157'
-download_url = 'https://drive.mtrix.com.br/download'
-auth_payload = {
-    'accessKey': 'API_TOKEN_LINEA-app',
-    'secretKey': '5iylIEAsXhCnQMZIbnHsxiuJ9wje2Y1a'
+logger = logging.getLogger(__name__)
+
+# Banco de dados
+engine = create_engine(
+    "mysql+pymysql://user:sellout2k24@db:3306/sellout_db?connect_timeout=180"
+)
+
+# Endpoints da API Drive Mtrix
+AUTH_URL = "https://drive.mtrix.com.br/auth"
+BASE_URL = "https://drive.mtrix.com.br/2157"
+DOWNLOAD_URL = "https://drive.mtrix.com.br/download"
+
+AUTH_PAYLOAD = {
+    "accessKey": "API_TOKEN_LINEA-app",
+    "secretKey": "5iylIEAsXhCnQMZIbnHsxiuJ9wje2Y1a",
 }
 
-def get_access_key():
-    """
-    Obtém o token de acesso para autenticação na API.
-    
-    :return: Access token.
-    """
+# Prefixos de storage — usamos S3A como fallback quando GS retorna 504
+BASE_GS = "gs://mtx-drive-linea-prd/2157/DEFAULT_FILES"
+BASE_S3A = "s3a://drive-linea/2157/DEFAULT_FILES"
+
+# Mapa de subpastas/prefixos por tipo de dado para construção manual do path
+DATA_TYPE_FOLDERS: Dict[str, str] = {
+    "sellout": "SELLOUT",
+    "stock": "STOCK",
+    "sfd": "SFD",
+    "customer": "CUSTOMER",
+}
+
+# Parâmetros de retry / timeout
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_BASE_DELAY = 5
+DEFAULT_TIMEOUT = 1200
+
+# Cache simples de token em memória
+_token_cache: Dict[str, Any] = {"value": None, "ts": 0}
+_TOKEN_TTL = 60 * 30  # 30 min
+
+
+# ---------------------------------------------------------------------------
+# Autenticação
+# ---------------------------------------------------------------------------
+
+def get_access_key(force_refresh: bool = False) -> str:
+    """Obtém o token de acesso, com cache em memória de 30 min."""
+    now = time.time()
+    if (
+        not force_refresh
+        and _token_cache["value"]
+        and now - _token_cache["ts"] < _TOKEN_TTL
+    ):
+        return _token_cache["value"]
+
     try:
-        response = requests.post(auth_url, data=auth_payload)
+        response = requests.post(AUTH_URL, data=AUTH_PAYLOAD, timeout=60)
         response.raise_for_status()
         token = response.text.strip()
-        logging.info("Access key obtida com sucesso.")
+        _token_cache.update({"value": token, "ts": now})
+        logger.info("Access key obtida com sucesso.")
         return token
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Erro ao obter access key: {e}")
-        raise
-
-    
-
-def get_latest_file_name(data_type, period):
-    """
-    Obtém o nome do arquivo mais recente para um tipo de dado específico.
-    
-    :param data_type: Tipo de dado (sellout, stock, sales_force, etc.)
-    :param period: Período específico no formato YYYYMM (opcional).
-    :return: Nome do arquivo mais recente.
-    """
-    token = get_access_key()
-    headers = {"Authorization": f"Bearer {token}"}
-    list_url = f"{base_url}/{data_type}/{period}"
-    logging.info(f"Url da api de lista de arquivos: {list_url}")
-    try:
-        response = requests.get(list_url, headers=headers)
-        response.raise_for_status()
-        files = response.json()
-        if not files:
-            raise ValueError("Nenhum arquivo encontrado.")
-
-        # Para o tipo customer, retorna o caminho específico conforme a documentação
-        if data_type == 'customer':
-            return "gs://mtx-drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
-            
-        latest_file = max(files, key=lambda x: x['dt_register'])
-        logging.info(f"Último arquivo {data_type} obtido: {latest_file['file_path']}")
-        return latest_file['file_path']
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Erro ao listar arquivos: {e}")
-        raise
-    except ValueError as e:
-        logging.error(f"Erro ao processar a resposta da API de listagem: {e}")
+    except RequestException as e:
+        logger.error(f"Erro ao obter access key: {e}")
         raise
 
 
-def get_manual_file_path(data_type, period):
-    """
-    Constrói o caminho do arquivo para um tipo de dado específico e período manualmente informado.
-    
-    :param data_type: Tipo de dado (sellout, stock, sfd, etc.)
-    :param period: Período específico no formato YYYYMM.
-    :return: Caminho do arquivo.
-    """
-    # Extrair apenas os primeiros 6 dígitos do período
-    period_str = str(period)
-    year = period_str[:4]
-    month = period_str[4:6]
-    
-    if data_type == 'sfd':
-        file_path = f"gs://mtx-drive-linea/2157/DEFAULT_FILES/SFD/{year}/{month}/sfd_{year}{month}.parquet"
-    elif data_type == 'stock':
-        file_path = f"gs://mtx-drive-linea/2157/DEFAULT_FILES/STOCK/{year}/{month}/stock_{year}{month}.parquet"
-    elif data_type == 'sellout':
-        file_path = f"gs://mtx-drive-linea/2157/DEFAULT_FILES/SELLOUT/{year}/{month}/sellout_{year}{month}.parquet"
-    elif data_type == 'customer':
-        file_path = f"gs://mtx-drive-linea/2157/DEFAULT_FILES/CUSTOMER/customer.parquet"
-    else:
-        return get_latest_file_name(data_type, period) #raise ValueError(f"Tipo de dado {data_type} não é suportado.")
-    
-    logging.info(f"Caminho do arquivo {data_type} construído: {file_path}")
+def _auth_headers(json_body: bool = False) -> Dict[str, str]:
+    headers = {"Authorization": f"Bearer {get_access_key()}"}
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+# ---------------------------------------------------------------------------
+# Resolução de caminho do arquivo
+# ---------------------------------------------------------------------------
+
+def _swap_to_s3a(file_path: str) -> str:
+    """Converte um path gs:// para o equivalente s3a:// usado como fallback."""
+    if file_path.startswith(BASE_GS):
+        return file_path.replace(BASE_GS, BASE_S3A, 1)
+    # Se já vier com outro prefixo, retorna inalterado
     return file_path
 
 
+def get_latest_file_name(data_type: str, period: str) -> str:
+    """Obtém o nome do arquivo mais recente para um tipo de dado/período."""
+    list_url = f"{BASE_URL}/{data_type}/{period}"
+    logger.info(f"Listando arquivos em: {list_url}")
 
-def download_and_extract_file(file_path, max_retries=5, base_delay=5):
-    """
-    Baixa e descomprime o arquivo especificado.
-    
-    :param file_path: Caminho do arquivo a ser baixado.
-    :param max_retries: Número máximo de tentativas de download.
-    :param base_delay: Tempo de espera inicial entre tentativas.
-    :return: Caminho do arquivo Parquet extraído.
-    """
-    token = get_access_key()
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        response = requests.get(list_url, headers=_auth_headers(), timeout=120)
+        response.raise_for_status()
+        files = response.json()
+
+        if not files:
+            raise ValueError("Nenhum arquivo encontrado.")
+
+        if data_type == "customer":
+            return f"{BASE_GS}/CUSTOMER/customer.parquet"
+
+        latest = max(files, key=lambda x: x["dt_register"])
+        logger.info(f"Último arquivo {data_type}: {latest['file_path']}")
+        return latest["file_path"]
+
+    except RequestException as e:
+        logger.error(f"Erro ao listar arquivos: {e}")
+        raise
+
+
+def get_manual_file_path(data_type: str, period) -> str:
+    """Constrói manualmente o path do arquivo no storage."""
+    period_str = str(period)
+    year, month = period_str[:4], period_str[4:6]
+
+    if data_type == "customer":
+        return f"{BASE_GS}/CUSTOMER/customer.parquet"
+
+    folder = DATA_TYPE_FOLDERS.get(data_type)
+    if not folder:
+        # data_type desconhecido -> cai no listing da API
+        return get_latest_file_name(data_type, period)
+
+    file_path = (
+        f"{BASE_GS}/{folder}/{year}/{month}/{data_type}_{year}{month}.parquet"
+    )
+    logger.info(f"Caminho do arquivo {data_type} construído: {file_path}")
+    return file_path
+
+
+# ---------------------------------------------------------------------------
+# Download + extração (com fallback gs:// -> s3a:// em caso de 504)
+# ---------------------------------------------------------------------------
+
+def _post_download(file_path: str, timeout: int) -> requests.Response:
+    """Executa um POST /download para o file_path informado."""
     payload = {"fileName": file_path}
+    response = requests.post(
+        DOWNLOAD_URL,
+        headers=_auth_headers(json_body=True),
+        json=payload,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response
 
-    attempt = 0
-    while attempt < max_retries:
-        try:
-            # Baixa o arquivo .zip
-            logging.info(f"Tentativa de download {attempt + 1} para o arquivo: {file_path}")
-            response = requests.post(download_url, headers=headers, json=payload, timeout=1200)  # Aumentando o timeout para 1200 segundos
-            response.raise_for_status()
-            
-            zip_file_path = os.path.basename(file_path) + ".zip"
-            with open(zip_file_path, "wb") as file:
-                file.write(response.content)
-            logging.info(f"Arquivo {file_path} baixado com sucesso.")
 
-            # Extrai o conteúdo do .zip
-            extract_path = os.path.join("extracted_files", os.path.basename(file_path))
-            if not os.path.exists(extract_path):
-                os.makedirs(extract_path)
+def _save_and_extract_zip(file_path: str, content: bytes) -> Tuple[str, str]:
+    """Salva o conteúdo .zip em disco e extrai o .parquet de dentro."""
+    zip_file_path = os.path.basename(file_path) + ".zip"
+    with open(zip_file_path, "wb") as fh:
+        fh.write(content)
+    logger.info(f"Arquivo {file_path} baixado em {zip_file_path}.")
 
-            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-            logging.info(f"Arquivo {file_path} descomprimido com sucesso.")
+    extract_path = os.path.join("extracted_files", os.path.basename(file_path))
+    os.makedirs(extract_path, exist_ok=True)
 
-            # Encontra o arquivo .parquet extraído
-            parquet_files = [f for f in os.listdir(extract_path) if f.endswith('.parquet')]
-            if not parquet_files:
-                raise FileNotFoundError("Nenhum arquivo Parquet encontrado na pasta extraída.")
-            
-            parquet_file_path = os.path.join(extract_path, parquet_files[0])
-            return parquet_file_path, zip_file_path
+    with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+        zip_ref.extractall(extract_path)
+    logger.info(f"Arquivo {file_path} descomprimido em {extract_path}.")
 
-        except requests.exceptions.RequestException as e:
-            attempt += 1
-            logging.error(f"Erro ao baixar o arquivo (tentativa {attempt}): {e}")
-            if attempt >= max_retries:
-                logging.error(f"Todas as {max_retries} tentativas de download falharam.")
+    parquet_files = [f for f in os.listdir(extract_path) if f.endswith(".parquet")]
+    if not parquet_files:
+        raise FileNotFoundError("Nenhum arquivo Parquet encontrado na pasta extraída.")
+
+    parquet_file_path = os.path.join(extract_path, parquet_files[0])
+    return parquet_file_path, zip_file_path
+
+
+def download_and_extract_file(
+    file_path: str,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    base_delay: int = DEFAULT_BASE_DELAY,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Tuple[str, str]:
+    """
+    Baixa e extrai o arquivo informado.
+
+    Retry com backoff exponencial. Se receber HTTP 504 e o path for gs://,
+    tenta automaticamente o equivalente s3a://.
+    """
+    candidate_paths = [file_path]
+    s3a_path = _swap_to_s3a(file_path)
+    if s3a_path != file_path:
+        candidate_paths.append(s3a_path)
+
+    last_error: Optional[Exception] = None
+
+    for current_path in candidate_paths:
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(
+                    f"Download (path={current_path}, tentativa {attempt}/{max_retries})"
+                )
+                response = _post_download(current_path, timeout=timeout)
+                return _save_and_extract_zip(current_path, response.content)
+
+            except HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                last_error = e
+                logger.error(f"HTTPError {status} em {current_path}: {e}")
+
+                # 504: aborta retries deste path e tenta o próximo (s3a://)
+                if status == 504 and current_path != candidate_paths[-1]:
+                    logger.warning(
+                        "Recebido 504 — trocando para fallback s3a:// imediatamente."
+                    )
+                    break
+
+                # Outros HTTPError -> aplica backoff e tenta de novo
+                if attempt >= max_retries:
+                    break
+
+            except RequestException as e:
+                last_error = e
+                logger.error(f"Erro de rede em {current_path} (tentativa {attempt}): {e}")
+                if attempt >= max_retries:
+                    break
+
+            except zipfile.BadZipFile as e:
+                logger.error(f"Erro ao descomprimir o arquivo {current_path}: {e}")
                 raise
-            wait_time = base_delay * (2 ** (attempt - 1))  # Backoff exponencial
-            logging.info(f"Aguardando {wait_time} segundos antes da próxima tentativa...")
+
+            # Backoff exponencial entre tentativas do mesmo path
+            wait_time = base_delay * (2 ** (attempt - 1))
+            logger.info(f"Aguardando {wait_time}s antes da próxima tentativa...")
             time.sleep(wait_time)
-        except zipfile.BadZipFile as e:
-            logging.error(f"Erro ao descomprimir o arquivo: {e}")
+
+    logger.error(
+        f"Falha definitiva ao baixar {file_path} após tentar gs:// e s3a://."
+    )
+    raise last_error if last_error else RuntimeError("Falha desconhecida no download.")
+
+
+def remove_files(parquet_file_path: str, zip_file_path: str) -> None:
+    """Remove os arquivos temporários após o processamento."""
+    for path in (parquet_file_path, zip_file_path):
+        try:
+            os.remove(path)
+            logger.info(f"Arquivo {path} removido com sucesso.")
+        except OSError as e:
+            logger.error(f"Erro ao remover {path}: {e}")
             raise
 
-def download_and_extract_file2(file_path):
-    """
-    Baixa e descomprime o arquivo especificado.
-    
-    :param file_path: Caminho do arquivo a ser baixado.
-    :return: Caminho do arquivo Parquet extraído.
-    """
-    token = get_access_key()
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {"fileName": file_path}
-    try:
 
-        # Baixa o arquivo .zip
-        response = requests.post(download_url, headers=headers, json=payload, timeout=600)
-        response.raise_for_status()
-        zip_file_path = os.path.basename(file_path) + ".zip"
-        with open(zip_file_path, "wb") as file:
-            file.write(response.content)
-        logging.info(f"Arquivo {file_path} baixado com sucesso.")
-
-        # Extrai o conteúdo do .zip
-        extract_path = os.path.join("extracted_files", os.path.basename(file_path))
-        if not os.path.exists(extract_path):
-            os.makedirs(extract_path)
-
-        with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_path)
-        logging.info(f"Arquivo {file_path} descomprimido com sucesso.")
-
-
-        # Encontra o arquivo .parquet extraído
-        parquet_files = [f for f in os.listdir(extract_path) if f.endswith('.parquet')]
-        if not parquet_files:
-            raise FileNotFoundError("Nenhum arquivo Parquet encontrado na pasta extraída.")
-        
-        parquet_file_path = os.path.join(extract_path, parquet_files[0])
-        return parquet_file_path, zip_file_path
-
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Erro ao baixar o arquivo: {e}")
-        raise
-    except zipfile.BadZipFile as e:
-        logging.error(f"Erro ao descomprimir o arquivo: {e}")
-        raise
-
-def remove_files(parquet_file_path, zip_file_path):
-    """
-    Remove os arquivos temporários após o processamento.
-    
-    :param parquet_file_path: Caminho do arquivo Parquet extraído.
-    :param zip_file_path: Caminho do arquivo Zip baixado.
-    """
-    try:
-        os.remove(parquet_file_path)
-        logging.info(f"Arquivo Parquet {parquet_file_path} removido com sucesso.")
-        os.remove(zip_file_path)
-        logging.info(f"Arquivo Zip {zip_file_path} removido com sucesso.")
-    except OSError as e:
-        logging.error(f"Erro ao remover arquivos: {e}")
-        raise
-def extract_data_from_parquet(parquet_file_path):
-    """
-    Extrai dados de um arquivo Parquet e retorna um DataFrame.
-    
-    :param parquet_file_path: Caminho do arquivo Parquet.
-    :return: DataFrame com os dados extraídos.
-    """
+def extract_data_from_parquet(parquet_file_path: str) -> pd.DataFrame:
+    """Lê um arquivo Parquet em DataFrame."""
     try:
         df = pd.read_parquet(parquet_file_path)
-        logging.info(f"Dados extraídos do arquivo Parquet: {parquet_file_path}")
+        logger.info(f"Dados extraídos do Parquet: {parquet_file_path}")
         return df
     except ValueError as e:
-        logging.error(f"Erro ao ler arquivo Parquet: {e}")
+        logger.error(f"Erro ao ler Parquet: {e}")
         raise
 
-def clear_and_insert_data(table_name, df, ano, mes):
+
+# ---------------------------------------------------------------------------
+# Persistência no MySQL — função genérica + wrappers por tabela
+# ---------------------------------------------------------------------------
+
+def _execute_clear_and_insert(
+    table_name: str,
+    df: pd.DataFrame,
+    insert_columns: list,
+    delete_sql: str,
+    delete_params,
+    fillna_empty: bool = True,
+) -> None:
     """
-    Limpa dados antigos e insere novos dados na tabela especificada.
-    
-    :param table_name: Nome da tabela no banco de dados.
-    :param df: DataFrame com os dados a serem inseridos.
-    :param ano: Ano para o qual os dados serão deletados.
-    :param mes: Mês para o qual os dados serão deletados.
+    Estrutura comum: abre conexão, executa o DELETE, faz INSERT em massa
+    a partir do DataFrame, commita e fecha.
+
+    :param insert_columns: colunas (na ordem) que serão usadas no INSERT.
+    :param delete_sql: SQL de DELETE (com placeholders %s).
+    :param delete_params: pode ser uma tupla (1 execução) ou lista de tuplas
+                          (uma execução por item).
     """
+    if fillna_empty:
+        df = df.fillna("")
+
+    placeholders = ", ".join(["%s"] * len(insert_columns))
+    insert_sql = (
+        f"INSERT INTO {table_name} ({', '.join(insert_columns)}) "
+        f"VALUES ({placeholders})"
+    )
+
+    connection = engine.raw_connection()
     try:
-        connection = engine.raw_connection()
         cursor = connection.cursor()
-        
-        # Excluir registros existentes para o mês e ano especificados
-        delete_query = f"DELETE FROM {table_name} WHERE DATE_FORMAT(SELLOUT_DATE, '%%Y-%%m') = %s"
-        cursor.execute(delete_query, (f"{ano}-{str(mes).zfill(2)}",))
-        logging.info(f"Dados antigos da tabela {table_name} deletados com sucesso.")
-        
-        # Inserir novos dados do DataFrame
-        insert_query = f"""
-            INSERT INTO {table_name} (
-                DISTRIBUTOR_CODE, SELLOUT_DATE, CUSTOMER_ID, SELLOUT_TYPE, INVOICE_ID, PRODUCT_CODE,
-                SALESREP_ID, QTY_UNIT, QTY_CONV1, QTY_CONV2, QTY_CONV3, QTY_CONV4, QTY_CONV5,
-                QTY_CONV6, QTY_CONV7, QTY_CUSTOM1, QTY_CUSTOM2, SELLOUT_VALUE_LC, SELLOUT_CONV1
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        df = df.fillna('')
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, tuple(row))
-        
+
+        # DELETE: pode ser 1 chamada ou várias (lote por chave)
+        if isinstance(delete_params, list):
+            for params in delete_params:
+                cursor.execute(delete_sql, params)
+        else:
+            cursor.execute(delete_sql, delete_params)
+        logger.info(f"Dados antigos de {table_name} deletados.")
+
+        # INSERT em massa via executemany — mais rápido que itertuples + execute
+        rows = [tuple(row) for row in df[insert_columns].itertuples(index=False)]
+        cursor.executemany(insert_sql, rows)
+
         connection.commit()
         cursor.close()
-        connection.close()
-        logging.info("Novos dados inseridos na tabela com sucesso.")
+        logger.info(f"{len(rows)} registros inseridos em {table_name}.")
     except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela {table_name}: {e}")
+        connection.rollback()
+        logger.error(f"Erro em clear_and_insert para {table_name}: {e}")
         raise
-
-def clear_and_insert_distributors(df):
-    """
-    Limpa dados antigos e insere novos dados na tabela de distribuidores.
-    
-    :param df: DataFrame com os dados a serem inseridos.
-    """
-    try:
-        connection = engine.raw_connection()
-        cursor = connection.cursor()
-        
-        delete_query = "DELETE FROM distribuidores WHERE DISTRIBUTOR_CODE = %s"
-        for distributor_code in df['DISTRIBUTOR_CODE'].unique():
-            cursor.execute(delete_query, (distributor_code,))
-        logging.info("Dados antigos da tabela distribuidores deletados com sucesso.")
-        
-        insert_query = """
-            INSERT INTO distribuidores (
-                DISTRIBUTOR_CODE, DISTRIBUTOR_ID, DISTRIBUTOR_NAME, DISTRIBUTOR_GROUP_NAME, DISTRIBUTOR_FLAG, DISTRIBUTOR_CHANNEL, SF_LEVEL1, SF_LEVEL2, SF_LEVEL3, SF_LEVEL4, SF_LEVEL5
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        df = df.fillna('')
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, tuple(row))
-        
-        connection.commit()
-        cursor.close()
+    finally:
         connection.close()
-        logging.info("Novos dados inseridos na tabela distribuidores com sucesso.")
-    except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela distribuidores: {e}")
-        raise
 
-def clear_and_insert_products(df):
+
+def clear_and_insert_data(table_name: str, df: pd.DataFrame, ano, mes) -> None:
+    """Sellout: delete por SELLOUT_DATE (YYYY-MM)."""
+    period = f"{ano}-{str(mes).zfill(2)}"
+    _execute_clear_and_insert(
+        table_name=table_name,
+        df=df,
+        insert_columns=[
+            "DISTRIBUTOR_CODE", "SELLOUT_DATE", "CUSTOMER_ID", "SELLOUT_TYPE",
+            "INVOICE_ID", "PRODUCT_CODE", "SALESREP_ID", "QTY_UNIT",
+            "QTY_CONV1", "QTY_CONV2", "QTY_CONV3", "QTY_CONV4", "QTY_CONV5",
+            "QTY_CONV6", "QTY_CONV7", "QTY_CUSTOM1", "QTY_CUSTOM2",
+            "SELLOUT_VALUE_LC", "SELLOUT_CONV1",
+        ],
+        delete_sql=(
+            f"DELETE FROM {table_name} "
+            f"WHERE DATE_FORMAT(SELLOUT_DATE, '%%Y-%%m') = %s"
+        ),
+        delete_params=(period,),
+    )
+
+
+def clear_and_insert_distributors(df: pd.DataFrame) -> None:
+    delete_params = [(code,) for code in df["DISTRIBUTOR_CODE"].unique()]
+    _execute_clear_and_insert(
+        table_name="distribuidores",
+        df=df,
+        insert_columns=[
+            "DISTRIBUTOR_CODE", "DISTRIBUTOR_ID", "DISTRIBUTOR_NAME",
+            "DISTRIBUTOR_GROUP_NAME", "DISTRIBUTOR_FLAG", "DISTRIBUTOR_CHANNEL",
+            "SF_LEVEL1", "SF_LEVEL2", "SF_LEVEL3", "SF_LEVEL4", "SF_LEVEL5",
+        ],
+        delete_sql="DELETE FROM distribuidores WHERE DISTRIBUTOR_CODE = %s",
+        delete_params=delete_params,
+    )
+
+
+def clear_and_insert_products(df: pd.DataFrame) -> None:
+    delete_params = [(code,) for code in df["PRODUCT_CODE"].unique()]
+    _execute_clear_and_insert(
+        table_name="produtos",
+        df=df,
+        insert_columns=[
+            "PRODUCT_CODE", "PRODUCT_EAN_DUN_ID", "PRODUCT_SKU_CODE", "PRODUCT_NAME",
+        ],
+        delete_sql="DELETE FROM produtos WHERE PRODUCT_CODE = %s",
+        delete_params=delete_params,
+        fillna_empty=False,
+    )
+
+
+def clear_and_insert_stock(df: pd.DataFrame, ano, mes) -> None:
+    period = f"{ano}-{str(mes).zfill(2)}"
+    _execute_clear_and_insert(
+        table_name="estoque",
+        df=df,
+        insert_columns=[
+            "DISTRIBUTOR_CODE", "PRODUCT_CODE", "STOCK_DATE", "QTY_UNIT",
+            "QTY_CONV1", "QTY_CONV2", "QTY_CONV3", "QTY_CONV4", "QTY_CONV5",
+            "QTY_CONV6", "QTY_CONV7", "QTY_CUSTOM1", "QTY_CUSTOM2",
+        ],
+        delete_sql=(
+            "DELETE FROM estoque "
+            "WHERE DATE_FORMAT(STOCK_DATE, '%%Y-%%m') = %s"
+        ),
+        delete_params=(period,),
+        fillna_empty=False,
+    )
+
+
+def clear_and_insert_customers(df: pd.DataFrame) -> None:
+    delete_params = [(cid,) for cid in df["CUSTOMER_ID"].unique()]
+    _execute_clear_and_insert(
+        table_name="clientes",
+        df=df,
+        insert_columns=[
+            "DISTRIBUTOR_CODE", "CUSTOMER_ID", "CUSTOMER_NAME", "CUSTOMER_ADDRESS",
+            "CUSTOMER_NEIGHBORHOOD", "CUSTOMER_CITY", "CUSTOMER_UF",
+            "CUSTOMER_ZIPCODE", "CUSTOMER_SEGMENTATION", "CUSTOMER_FLAG",
+        ],
+        delete_sql="DELETE FROM clientes WHERE CUSTOMER_ID = %s",
+        delete_params=delete_params,
+    )
+
+
+def clear_and_insert_sales_force(df: pd.DataFrame, ano, mes) -> None:
     """
-    Limpa dados antigos e insere novos dados na tabela de produtos.
-    
-    :param df: DataFrame com os dados a serem inseridos.
+    Caso especial: DELETE em lotes de 1000 (LIMIT) e INSERT específico,
+    portanto não usa _execute_clear_and_insert.
     """
+    period = f"{ano}{str(mes).zfill(2)}"
+    batch_size = 1000
+
+    connection = engine.raw_connection()
     try:
-        connection = engine.raw_connection()
-        cursor = connection.cursor()
-        
-        delete_query = "DELETE FROM produtos WHERE PRODUCT_CODE = %s"
-        for product_code in df['PRODUCT_CODE'].unique():
-            cursor.execute(delete_query, f'{product_code}')
-        logging.info("Dados antigos da tabela produtos deletados com sucesso.")
-        
-        insert_query = f"""
-            INSERT INTO produtos (
-                PRODUCT_CODE, PRODUCT_EAN_DUN_ID, PRODUCT_SKU_CODE, PRODUCT_NAME
-            ) VALUES (%s, %s, %s, %s)
-        """
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, tuple(row))
-        
-        connection.commit()
-        cursor.close()
-        connection.close()
-        logging.info("Novos dados inseridos na tabela produtos com sucesso.")
-    except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela produtos: {e}")
-        raise
-
-def clear_and_insert_stock(df, ano, mes):
-    """
-    Limpa dados antigos e insere novos dados na tabela de estoque.
-    
-    :param df: DataFrame com os dados a serem inseridos.
-    """
-    try:
-        connection = engine.raw_connection()
-        cursor = connection.cursor()
-        
-        delete_query = f"DELETE FROM estoque WHERE DATE_FORMAT(STOCK_DATE, '%%Y-%%m') = %s"
-        cursor.execute(delete_query, (f"{ano}-{str(mes).zfill(2)}",))
-
-        logging.info("Dados antigos da tabela estoque deletados com sucesso.")
-        
-        insert_query = """
-            INSERT IGNORE INTO estoque (
-                DISTRIBUTOR_CODE, PRODUCT_CODE, STOCK_DATE, QTY_UNIT, QTY_CONV1, QTY_CONV2, QTY_CONV3, QTY_CONV4, QTY_CONV5, QTY_CONV6, QTY_CONV7, QTY_CUSTOM1, QTY_CUSTOM2
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,  %s)
-        """
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, tuple(row))
-        
-        connection.commit()
-        cursor.close()
-        connection.close()
-        logging.info("Novos dados inseridos na tabela estoque com sucesso.")
-    except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela estoque: {e}")
-        raise
-
-def clear_and_insert_sales_force(df, ano, mes):
-    """
-    Limpa dados antigos e insere novos dados na tabela de força de vendas.
-    
-    :param df: DataFrame com os dados a serem inseridos.
-    :param ano: Ano para o qual os dados serão deletados.
-    :param mes: Mês para o qual os dados serão deletados.
-    """
-    try:
-        connection = engine.raw_connection()
         cursor = connection.cursor()
 
-        # Determina o período a ser excluído
-        period = f"{ano}{str(mes).zfill(2)}"
-
-        # Determina o tamanho do lote para exclusão
-        batch_size = 1000
-
-        # Executa a exclusão em lotes
         total_deleted = 0
+        delete_query = (
+            "DELETE FROM forca_vendas WHERE SF_YEAR_MONTH = %s LIMIT %s"
+        )
         while True:
-            delete_query = """
-                DELETE FROM forca_vendas 
-                WHERE SF_YEAR_MONTH = %s
-                LIMIT %s
-            """
             cursor.execute(delete_query, (period, batch_size))
             connection.commit()
             rows_deleted = cursor.rowcount
-            total_deleted += rows_deleted            
-            logging.info(f"Deletados {rows_deleted} registros da tabela forca_vendas.")
+            total_deleted += rows_deleted
+            logger.info(f"Deletados {rows_deleted} registros de forca_vendas.")
             if rows_deleted < batch_size:
                 break
+        logger.info(f"Total deletado em forca_vendas: {total_deleted}.")
 
-        logging.info(f"Total de {total_deleted} registros deletados da tabela forca_vendas.")
-
-        # Insere os novos dados
         insert_query = """
             INSERT INTO forca_vendas (
-                DISTRIBUTOR_CODE, SF_YEAR_MONTH, SALESREP_ID, SF_LEVEL2_ID, SF_LEVEL1_ID
+                DISTRIBUTOR_CODE, SF_YEAR_MONTH, SALESREP_ID,
+                SF_LEVEL2_ID, SF_LEVEL1_ID
             ) VALUES (%s, %s, %s, %s, %s)
         """
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, (row.DISTRIBUTOR_CODE, row.SF_YEAR_MONTH, row.SALESREP_ID, row.SF_LEVEL2_ID, row.SF_LEVEL1_ID))
-        
+        rows = [
+            (r.DISTRIBUTOR_CODE, r.SF_YEAR_MONTH, r.SALESREP_ID,
+             r.SF_LEVEL2_ID, r.SF_LEVEL1_ID)
+            for r in df.itertuples(index=False)
+        ]
+        cursor.executemany(insert_query, rows)
         connection.commit()
         cursor.close()
-        connection.close()
-        logging.info("Novos dados inseridos na tabela forca_vendas com sucesso.")
+        logger.info(f"{len(rows)} registros inseridos em forca_vendas.")
     except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela forca_vendas: {e}")
+        connection.rollback()
+        logger.error(f"Erro em clear_and_insert_sales_force: {e}")
         raise
-
-def clear_and_insert_customers(df):
-    """
-    Limpa dados antigos e insere novos dados na tabela de clientes.
-    
-    :param df: DataFrame com os dados a serem inseridos.
-    """
-    try:
-        connection = engine.raw_connection()
-        cursor = connection.cursor()
-        
-        # Deletar registros antigos
-        delete_query = "DELETE FROM clientes WHERE CUSTOMER_ID = %s"
-        for customer_id in df['CUSTOMER_ID'].unique():
-            cursor.execute(delete_query, (customer_id,))
-        logging.info("Dados antigos da tabela clientes deletados com sucesso.")
-        
-        # Inserir novos dados
-        insert_query = """
-            INSERT INTO clientes (
-                DISTRIBUTOR_CODE, CUSTOMER_ID, CUSTOMER_NAME, CUSTOMER_ADDRESS, CUSTOMER_NEIGHBORHOOD,
-                CUSTOMER_CITY, CUSTOMER_UF, CUSTOMER_ZIPCODE, CUSTOMER_SEGMENTATION, CUSTOMER_FLAG
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        for row in df.itertuples(index=False):
-            cursor.execute(insert_query, tuple(row))
-        
-        connection.commit()
-        cursor.close()
+    finally:
         connection.close()
-        logging.info("Novos dados inseridos na tabela clientes com sucesso.")
-    except Exception as e:
-        logging.error(f"Erro ao limpar e inserir dados na tabela clientes: {e}")
-        raise
